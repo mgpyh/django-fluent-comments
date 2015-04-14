@@ -1,5 +1,4 @@
 from django.conf import settings
-from django.contrib import comments
 from django_comments import Comment
 from django_comments.managers import CommentManager
 from django.contrib.contenttypes.generic import GenericRelation

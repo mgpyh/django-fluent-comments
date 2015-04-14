@@ -1,11 +1,11 @@
 from django.conf import settings
 from django.contrib import admin
-from django.contrib import comments
 from django.contrib.admin.widgets import AdminTextInputWidget
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.html import escape
 from django.utils.translation import ugettext_lazy as _
 from fluent_comments import appsettings
+import django_comments as comments
 
 
 # Ensure the admin app is loaded,
