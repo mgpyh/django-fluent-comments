@@ -1,5 +1,8 @@
 from django.conf import settings
+from django.db import models
+from django.utils.translation import ugettext_lazy as _
 from django_comments import Comment
+from django_comments.models import BaseCommentAbstractModel
 from django_comments.managers import CommentManager
 from django.contrib.contenttypes.generic import GenericRelation
 from django.contrib.sites.models import get_current_site
@@ -10,6 +13,7 @@ from django.template import RequestContext
 from django.template.loader import render_to_string
 from fluent_comments import appsettings
 
+COMMENT_MAX_LENGTH = getattr(settings, 'COMMENT_MAX_LENGTH', 3000)
 
 class FluentCommentManager(CommentManager):
     """
@@ -19,14 +23,31 @@ class FluentCommentManager(CommentManager):
         return super(CommentManager, self).get_queryset().select_related('user')
 
 
-class FluentComment(Comment):
-    """
-    Proxy model to make sure that a ``select_related()`` is performed on the ``user`` field.
-    """
+class FluentComment(BaseCommentAbstractModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name=_('user'), related_name="%(class)s_comments")
+    created_time = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_time = models.DateTimeField(auto_now=True)
+    comment = models.TextField(_('comment'), max_length=COMMENT_MAX_LENGTH)
+    is_anonymous = models.BooleanField(default=False)
+    parent = models.ForeignKey("self", null=True, blank=True)
+    floor = models.IntegerField(default=-1)
+    ip_address = models.GenericIPAddressField(_('IP address'), unpack_ipv4=True, blank=True, null=True)
+    is_public = models.BooleanField(_('is public'), default=True,
+                    help_text=_('Uncheck this box to make the comment effectively ' \
+                                'disappear from the site.'))
+    is_removed = models.BooleanField(_('is removed'), default=False,
+                    help_text=_('Check this box if the comment is inappropriate. ' \
+                                'A "This comment has been removed" message will ' \
+                                'be displayed instead.'))
+
     objects = FluentCommentManager()
 
+    def name(self):
+        return self.is_anonymous and _("Anonymous User") or self.user.username
+
     class Meta:
-        proxy = True
+        ordering = ('-created_time',)
+        permissions = [("can_moderate", "Can moderate comments")]
 
 
 @receiver(signals.comment_was_posted)

@@ -33,7 +33,7 @@ class FluentCommentsAdmin(CommentsAdminBase):
 
     fieldsets = [
         (_('Content'),
-           {'fields': ('object_link', 'user_name', 'user_email', 'user_url', 'comment', 'submit_date',)}
+           {'fields': ('object_link', 'user_name', 'user_email', 'user_url', 'comment', 'created_time',)}
         ),
         (_('Account information'),
            {'fields': ('user', 'ip_address',)},
@@ -43,12 +43,15 @@ class FluentCommentsAdmin(CommentsAdminBase):
         ),
     ]
 
-    list_display = ('user_name_col', 'object_link', 'ip_address', 'submit_date', 'is_public', 'is_removed')
-    readonly_fields = ('object_link', 'user', 'ip_address', 'submit_date',)
+    list_display = ('user_name_col', 'object_link', 'ip_address', 'created_time', 'is_public', 'is_removed')
+    readonly_fields = ('object_link', 'user', 'ip_address', 'created_time',)
+    date_hierarchy = 'created_time'
+    ordering = ('-created_time', )
+    list_filter = ('created_time', 'site', 'is_public', 'is_removed')
 
     # Adjust the fieldsets for threaded comments
     if appsettings.USE_THREADEDCOMMENTS:
-        fieldsets[0][1]['fields'] = ('object_link', 'user_name', 'user_email', 'user_url', 'title', 'comment', 'submit_date',)  # add title field.
+        fieldsets[0][1]['fields'] = ('object_link', 'user_name', 'user_email', 'user_url', 'title', 'comment', 'created_time',)  # add title field.
         fieldsets.insert(2, (_('Hierarchy'), {'fields': ('parent',)}))
         raw_id_fields = ('parent',)
 
