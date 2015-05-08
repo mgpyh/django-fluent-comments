@@ -48,6 +48,9 @@ class FluentComment(BaseCommentAbstractModel):
     class Meta:
         ordering = ('-created_time',)
         permissions = [("can_moderate", "Can moderate comments")]
+        index_together = [
+            ["site", "object_pk", "content_type", "is_public", "is_removed"],
+        ]
 
 
 @receiver(signals.comment_was_posted)
