@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.db import models
 from django.utils.translation import ugettext_lazy as _
+import django_comments
 from django_comments import Comment
 from django_comments.models import BaseCommentAbstractModel
 from django_comments.managers import CommentManager
@@ -86,7 +87,7 @@ def get_comments_for_model(content_object, include_moderated=False):
     """
     Return the QuerySet with all comments for a given model.
     """
-    qs = comments.get_model().objects.for_model(content_object)
+    qs = django_comments.get_model().objects.for_model(content_object)
 
     if not include_moderated:
         qs = qs.filter(is_public=True, is_removed=False)

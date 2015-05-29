@@ -7,6 +7,13 @@
   the 'comments/comment.html template is also used by the Ajax view.
 
 {% endcomment %}
+{% load endless %}
+{% paginate comment_num_per_page comment_list %}
 <div id="comments-{{ target_object_id }}" data-object-id="{{ target_object_id }}" class="comments {% if not comment_list %} empty{% endif %}">
   {% for comment in comment_list %}{% include "comments/comment.html" %}{% endfor %}
+</div>
+<div class="pagination-box">
+    <ul class="pagination">
+        {% show_pages %}
+    </ul>
 </div>
