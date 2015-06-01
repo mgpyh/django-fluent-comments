@@ -6,6 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
 from django.utils.encoding import force_text
 from django.utils import timezone
+from django import forms
 from fluent_comments import appsettings
 
 
@@ -50,19 +51,18 @@ class FluentCommentForm(base_class):
         return get_model()
 
     def check_for_duplicate_comment(self, new):
-        """
-        Check that a submitted comment isn't a duplicate. This might be caused
-        by someone posting a comment twice. If it is a dup, silently return the *previous* comment.
-        """
+        return new
+
+    def clean(self):
         possible_duplicates = self.get_comment_model()._default_manager.using(
             self.target_object._state.db
         ).filter(
-            content_type = new.content_type,
-            object_pk = new.object_pk,
-            user__email = self.data.get('email'),
+            content_type = ContentType.objects.get_for_model(self.target_object),
+            object_pk = self.cleaned_data.get('object_pk'),
+            user = self.data.get('user'),
         )
         for old in possible_duplicates:
-            if old.comment == new.comment:
-                return old
+            if old.comment == self.cleaned_data.get('comment'):
+                raise forms.ValidationError("duplicate content")
+        return super(FluentCommentForm, self).clean()
 
-        return new
