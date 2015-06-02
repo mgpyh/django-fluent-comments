@@ -87,7 +87,7 @@ def get_comments_for_model(content_object, include_moderated=False):
     """
     Return the QuerySet with all comments for a given model.
     """
-    qs = django_comments.get_model().objects.for_model(content_object)
+    qs = django_comments.get_model().objects.for_model(content_object).filter(site_id=settings.SITE_ID)
 
     if not include_moderated:
         qs = qs.filter(is_public=True, is_removed=False)
