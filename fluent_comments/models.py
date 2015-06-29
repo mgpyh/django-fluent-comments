@@ -29,19 +29,31 @@ class FluentCommentManager(CommentManager):
         return super(CommentManager, self).get_queryset().select_related('user')
 
     def rebuild(self):
-        for comment in self.all():
-            comment.parent_save_first()
+        self.update(tree=None)
+        parent = None
+        while True:
+            comments = list(self.filter(parent=parent))
+            if comments:
+                for comment in comments:
+                    comment.save()
+                parent = comments
+            else:
+                break
 
-    def comment_get_or_create(self, *args, **kwargs):
-        try:
-            comment = self.get(*args, **kwargs)
-        except self.model.DoesNotExist:
-            comment = self.model(*args, **kwargs)
-            comment.comment_save()
-            created = True
-        else:
-            created = False
-        return comment, created
+    #    self.model.objects.update(tree=None)
+    #    for comment in self.iterator():
+    #        comment.parent_save_first()
+
+    # def comment_get_or_create(self, *args, **kwargs):
+    #     try:
+    #         comment = self.get(*args, **kwargs)
+    #     except self.model.DoesNotExist:
+    #         comment = self.model(*args, **kwargs)
+    #         comment.comment_save()
+    #         created = True
+    #     else:
+    #         created = False
+    #     return comment, created
 
 
 class MpttTreeLock(models.Model):
@@ -74,7 +86,7 @@ class FluentComment(BaseCommentAbstractModel):
     parent = models.ForeignKey("self", null=True, blank=True)
     left = models.PositiveIntegerField()
     right = models.PositiveIntegerField()
-    tree = models.ForeignKey(MpttTree)
+    tree = models.ForeignKey(MpttTree, null=True)
     floor = models.IntegerField(default=-1)
     ip_address = models.GenericIPAddressField(_('IP address'), unpack_ipv4=True, blank=True, null=True)
     is_public = models.BooleanField(_('is public'), default=True,
@@ -91,20 +103,23 @@ class FluentComment(BaseCommentAbstractModel):
     def name(self):
         return self.is_anonymous and _("Anonymous User") or self.user.username
 
-    def comment_save(self, *args, **kwargs):
-        with transaction.atomic():
-            fluent_signals.comment_save_before.send(sender=self.__class__, instance=self)
-            self.save(*args, **kwargs)
-            fluent_signals.comment_save_after.send(sender=self.__class__, instance=self)
+    # def comment_save(self, *args, **kwargs):
+    #     with transaction.atomic():
+    #         fluent_signals.comment_save_before.send(sender=self.__class__, instance=self)
+    #         self.save(*args, **kwargs)
+    #         fluent_signals.comment_save_after.send(sender=self.__class__, instance=self)
 
     def parent_save_first(self):
-        self.parent and self.parent_save_first()
-        self.comment_save()
+        parent = self.parent
+        if parent:
+            parent.parent_save_first()
+        # self.comment_save()
+        self.save()
 
 
-    # def save(self, *args, **kwargs):
-    #     with transaction.atomic():
-    #         super(FluentComment, self).save(*args, **kwargs)
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super(FluentComment, self).save(*args, **kwargs)
 
     def get_ancestors(self, ascending=False, include_self=False):
         if not self.parent:
@@ -143,8 +158,12 @@ class FluentComment(BaseCommentAbstractModel):
         ]
 
 
-@receiver(fluent_signals.comment_save_before, sender=FluentComment)
+# @receiver(fluent_signals.comment_save_before, sender=FluentComment)
+@receiver(pre_save, sender=FluentComment)
 def save_mptt_comment(sender, instance, *args, **kwargs):
+    tree = instance.tree
+    if tree:
+        return
     parent = instance.parent
     if parent:
         right = parent.right
@@ -171,23 +190,19 @@ def save_mptt_comment(sender, instance, *args, **kwargs):
         # sender.objects.filter(tree_id=tree_id).filter(right__gte=right).update(right=F('right') + 2)
         # sender.objects.filter(tree_id=tree_id).filter(left__gte=right).update(left=F('left') + 2)
     else:
-        try:
-            tree = instance.tree
-        except:
-            tree = MpttTree()
-            tree.save()
+        tree = MpttTree()
+        tree.save()
         instance.left = 1
         instance.right = 2
         instance.tree = tree
 
-
-@receiver(fluent_signals.comment_save_after, sender=FluentComment)
+# @receiver(fluent_signals.comment_save_after, sender=FluentComment)
+@receiver(post_save, sender=FluentComment)
 def save_mptt_comment_release_lock(sender, instance, *args, **kwargs):
     parent = instance.parent
     if parent:
         tree_id = parent.tree.id
-        lock = MpttTreeLock.objects.get(unique_key="tree_id={}".format(tree_id))
-        lock.delete()
+        MpttTreeLock.objects.filter(unique_key="tree_id={}".format(tree_id)).delete()
 
 # @receiver(fluent.signals.comment_will_be_removed)
 # def remove_mptt_comment(sender, comment, request, **kwargs):
