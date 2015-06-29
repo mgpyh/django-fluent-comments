@@ -30,13 +30,13 @@ class FluentCommentManager(CommentManager):
 
     def rebuild(self):
         self.update(tree=None)
-        parent = None
+        comments = list(self.filter(parent=None))
         while True:
-            comments = list(self.filter(parent=parent))
             if comments:
                 for comment in comments:
                     comment.save()
                 parent = comments
+                comments = list(self.filter(parent__in=parent))
             else:
                 break
 
