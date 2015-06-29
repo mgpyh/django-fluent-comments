@@ -28,6 +28,21 @@ class FluentCommentManager(CommentManager):
     def get_queryset(self):
         return super(CommentManager, self).get_queryset().select_related('user')
 
+    def rebuild(self):
+        for comment in self.all():
+            comment.parent_save_first()
+
+    def comment_get_or_create(self, *args, **kwargs):
+        try:
+            comment = self.get(*args, **kwargs)
+        except self.model.DoesNotExist:
+            comment = self.model(*args, **kwargs)
+            comment.comment_save()
+            created = True
+        else:
+            created = False
+        return comment, created
+
 
 class MpttTreeLock(models.Model):
     unique_key = models.CharField(max_length=100)
@@ -76,9 +91,20 @@ class FluentComment(BaseCommentAbstractModel):
     def name(self):
         return self.is_anonymous and _("Anonymous User") or self.user.username
 
-    def save(self, *args, **kwargs):
+    def comment_save(self, *args, **kwargs):
         with transaction.atomic():
-            super(FluentComment, self).save(*args, **kwargs)
+            fluent_signals.comment_save_before.send(sender=self.__class__, instance=self)
+            self.save(*args, **kwargs)
+            fluent_signals.comment_save_after.send(sender=self.__class__, instance=self)
+
+    def parent_save_first(self):
+        self.parent and self.parent_save_first()
+        self.comment_save()
+
+
+    # def save(self, *args, **kwargs):
+    #     with transaction.atomic():
+    #         super(FluentComment, self).save(*args, **kwargs)
 
     def get_ancestors(self, ascending=False, include_self=False):
         if not self.parent:
@@ -96,9 +122,12 @@ class FluentComment(BaseCommentAbstractModel):
                 right += 1
 
             qs = FluentComment.objects.filter(
+                is_removed=False,
+                is_public=True,
                 left__lte=left,
                 right__gte=right,
-                tree=self.tree
+                tree=self.tree,
+                site__pk=settings.SITE_ID
             )
 
             qs = qs.order_by(order_by)
@@ -114,7 +143,7 @@ class FluentComment(BaseCommentAbstractModel):
         ]
 
 
-@receiver(pre_save, sender=FluentComment)
+@receiver(fluent_signals.comment_save_before, sender=FluentComment)
 def save_mptt_comment(sender, instance, *args, **kwargs):
     parent = instance.parent
     if parent:
@@ -142,18 +171,21 @@ def save_mptt_comment(sender, instance, *args, **kwargs):
         # sender.objects.filter(tree_id=tree_id).filter(right__gte=right).update(right=F('right') + 2)
         # sender.objects.filter(tree_id=tree_id).filter(left__gte=right).update(left=F('left') + 2)
     else:
-        tree = MpttTree()
-        tree.save()
+        try:
+            tree = instance.tree
+        except:
+            tree = MpttTree()
+            tree.save()
         instance.left = 1
         instance.right = 2
         instance.tree = tree
 
 
-@receiver(post_save, sender=FluentComment)
+@receiver(fluent_signals.comment_save_after, sender=FluentComment)
 def save_mptt_comment_release_lock(sender, instance, *args, **kwargs):
     parent = instance.parent
     if parent:
-        tree_id = parent.tree_id
+        tree_id = parent.tree.id
         lock = MpttTreeLock.objects.get(unique_key="tree_id={}".format(tree_id))
         lock.delete()
 
