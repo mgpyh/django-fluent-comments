@@ -1,19 +1,24 @@
+from hashlib import md5
+
 from django.conf import settings
-from django.db import models
+from django.db import models, transaction
 from django.utils.translation import ugettext_lazy as _
 import django_comments
 from django_comments import Comment
+from django.db.models.signals import post_save, pre_save, pre_delete
 from django_comments.models import BaseCommentAbstractModel
 from django_comments.managers import CommentManager
 from django.contrib.contenttypes.generic import GenericRelation
 from django.contrib.sites.models import get_current_site
 from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
+from django.db import connection
 from django.dispatch import receiver
 from django_comments import signals
 from django.template import RequestContext
 from django.template.loader import render_to_string
 from fluent_comments import appsettings
+from fluent_comments import signals as fluent_signals
 
 COMMENT_MAX_LENGTH = getattr(settings, 'COMMENT_MAX_LENGTH', 3000)
 
@@ -24,6 +29,54 @@ class FluentCommentManager(CommentManager):
     def get_queryset(self):
         return super(CommentManager, self).get_queryset()
 
+    def rebuild(self):
+        self.update(tree=None)
+        comments = list(self.filter(parent=None))
+        while True:
+            if comments:
+                for comment in comments:
+                    comment.save()
+                parent = comments
+                comments = list(self.filter(parent__in=parent))
+            else:
+                break
+
+    #    self.model.objects.update(tree=None)
+    #    for comment in self.iterator():
+    #        comment.parent_save_first()
+
+    # def comment_get_or_create(self, *args, **kwargs):
+    #     try:
+    #         comment = self.get(*args, **kwargs)
+    #     except self.model.DoesNotExist:
+    #         comment = self.model(*args, **kwargs)
+    #         comment.comment_save()
+    #         created = True
+    #     else:
+    #         created = False
+    #     return comment, created
+
+
+class MpttTreeLock(models.Model):
+    unique_key = models.CharField(max_length=100)
+    md5_key = models.CharField(max_length=32, unique=True)
+
+
+@receiver(pre_save, sender=MpttTreeLock)
+def build_unique_key_md5(sender, instance, **kwargs):
+    if not instance.unique_key:
+        md5_key = md5(instance.unique_key).hexdigest()
+        instance.md5_key = md5_key
+
+class MpttTree(models.Model):
+    pass
+
+
+class MPTT(models.Model):
+    left = models.PositiveIntegerField()
+    right = models.PositiveIntegerField()
+    tree_id = models.ForeignKey(MpttTree)
+
 
 class FluentComment(BaseCommentAbstractModel):
     user = models.ForeignKey(settings.AUTH_USER_MODEL, verbose_name=_('user'), related_name="%(class)s_comments")
@@ -32,6 +85,9 @@ class FluentComment(BaseCommentAbstractModel):
     comment = models.TextField(_('comment'), max_length=COMMENT_MAX_LENGTH)
     is_anonymous = models.BooleanField(default=False)
     parent = models.ForeignKey("self", null=True, blank=True)
+    left = models.PositiveIntegerField()
+    right = models.PositiveIntegerField()
+    tree = models.ForeignKey(MpttTree, null=True)
     floor = models.IntegerField(default=-1)
     ip_address = models.GenericIPAddressField(_('IP address'), unpack_ipv4=True, blank=True, null=True)
     is_public = models.BooleanField(_('is public'), default=True,
@@ -41,6 +97,7 @@ class FluentComment(BaseCommentAbstractModel):
                     help_text=_('Check this box if the comment is inappropriate. ' \
                                 'A "This comment has been removed" message will ' \
                                 'be displayed instead.'))
+    platform = models.CharField(max_length=50, null=True, blank=True)
 
     objects = FluentCommentManager()
 
@@ -60,12 +117,129 @@ class FluentComment(BaseCommentAbstractModel):
 
 
 
+    # def comment_save(self, *args, **kwargs):
+    #     with transaction.atomic():
+    #         fluent_signals.comment_save_before.send(sender=self.__class__, instance=self)
+    #         self.save(*args, **kwargs)
+    #         fluent_signals.comment_save_after.send(sender=self.__class__, instance=self)
+
+    def parent_save_first(self):
+        parent = self.parent
+        if parent:
+            parent.parent_save_first()
+        # self.comment_save()
+        self.save()
+
+
+    def save(self, *args, **kwargs):
+        with transaction.atomic():
+            super(FluentComment, self).save(*args, **kwargs)
+
+    def get_ancestors(self, ascending=False, include_self=False):
+        if not self.parent:
+            if not include_self:
+                return FluentComment.objects.none()
+            else:
+                # Filter on pk for efficiency.
+                qs = FluentComment.objects.filter(pk=self.pk)
+        else:
+            order_by = '-left' if ascending else 'left'
+            left = self.left
+            right = self.right
+            if not include_self:
+                left -= 1
+                right += 1
+
+            qs = FluentComment.objects.filter(
+                is_removed=False,
+                is_public=True,
+                left__lte=left,
+                right__gte=right,
+                tree=self.tree,
+                site__pk=settings.SITE_ID
+            )
+
+            qs = qs.order_by(order_by)
+        return qs
+
+
+
     class Meta:
         ordering = ('-created_time',)
         permissions = [("can_moderate", "Can moderate comments")]
         index_together = [
             ["site", "object_pk", "content_type", "is_public", "is_removed"],
         ]
+
+
+# @receiver(fluent_signals.comment_save_before, sender=FluentComment)
+@receiver(pre_save, sender=FluentComment)
+def save_mptt_comment(sender, instance, *args, **kwargs):
+    tree = instance.tree
+    if tree:
+        return
+    parent = instance.parent
+    if parent:
+        right = parent.right
+        tree = parent.tree
+        tree_id = tree.id
+        lock = MpttTreeLock(unique_key="tree_id={}".format(tree_id))
+        lock.save()
+        instance.left = right
+        instance.right = right + 1
+        instance.tree = tree
+        table = sender._meta.db_table
+        cursor = connection.cursor()
+        cursor.execute("""
+        UPDATE "{0}"
+	            SET "left" = CASE
+	                    WHEN "left" >= {1}
+	                        THEN "left" + 2
+	                    ELSE "left" END,
+	                "right" = CASE
+	                    WHEN "right" >= {1}
+	                        THEN "right" + 2
+	                    ELSE "right" END
+	            WHERE "tree_id" = {2}""".format(table, right, tree_id))
+        # sender.objects.filter(tree_id=tree_id).filter(right__gte=right).update(right=F('right') + 2)
+        # sender.objects.filter(tree_id=tree_id).filter(left__gte=right).update(left=F('left') + 2)
+    else:
+        tree = MpttTree()
+        tree.save()
+        instance.left = 1
+        instance.right = 2
+        instance.tree = tree
+
+# @receiver(fluent_signals.comment_save_after, sender=FluentComment)
+@receiver(post_save, sender=FluentComment)
+def save_mptt_comment_release_lock(sender, instance, *args, **kwargs):
+    parent = instance.parent
+    if parent:
+        tree_id = parent.tree.id
+        MpttTreeLock.objects.filter(unique_key="tree_id={}".format(tree_id)).delete()
+
+# @receiver(fluent.signals.comment_will_be_removed)
+# def remove_mptt_comment(sender, comment, request, **kwargs):
+#     tree_id = comment.tree_id
+#     left = comment.left
+#     right = comment.right
+#     lock = MpttTreeLock(unique_key="tree_id={}".format(tree_id))
+#     lock.save()
+#     table = sender._meta.db_table
+#     cursor = connection.cursor()
+#     cursor.execute("""
+#     UPDATE "{0}"
+# 	        SET "left" = CASE
+# 	                WHEN "left" > {1}
+# 	                    THEN "left" - 2
+# 	                ELSE "left" END,
+# 	            "right" = CASE
+# 	                WHEN "right" >= {2}
+# 	                    THEN "right" + 2
+# 	                ELSE "right" END
+# 	        WHERE "tree_id" = {3}""".format(table, left, right, tree_id))
+#     lock.delete()
+
 
 
 @receiver(signals.comment_was_posted)
