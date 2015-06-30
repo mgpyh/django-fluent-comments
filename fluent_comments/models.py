@@ -7,6 +7,7 @@ from django_comments.models import BaseCommentAbstractModel
 from django_comments.managers import CommentManager
 from django.contrib.contenttypes.generic import GenericRelation
 from django.contrib.sites.models import get_current_site
+from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.dispatch import receiver
 from django_comments import signals
@@ -21,7 +22,7 @@ class FluentCommentManager(CommentManager):
     Manager to optimize SQL queries for comments.
     """
     def get_queryset(self):
-        return super(CommentManager, self).get_queryset().select_related('user')
+        return super(CommentManager, self).get_queryset()
 
 
 class FluentComment(BaseCommentAbstractModel):
@@ -43,8 +44,21 @@ class FluentComment(BaseCommentAbstractModel):
 
     objects = FluentCommentManager()
 
+
+    def __init__(self, *args, **kwargs):
+        super(FluentComment, self).__init__(*args, **kwargs)
+
+        if self.is_anonymous:
+            setattr(self, 'realuser', self.user)
+            anony_user = get_user_model().objects.get_anonymous_user()
+            setattr(self, 'user', anony_user)
+            setattr(self, FluentComment.user.cache_name, anony_user)
+
+
     def name(self):
-        return self.is_anonymous and _("Anonymous User") or self.user.username
+        return self.is_anonymous and get_user_model().objects.get_anonymous_user().username or self.user.username
+
+
 
     class Meta:
         ordering = ('-created_time',)
