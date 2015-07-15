@@ -98,13 +98,13 @@ class FluentComment(BaseCommentAbstractModel):
                                 'A "This comment has been removed" message will ' \
                                 'be displayed instead.'))
     platform = models.CharField(max_length=50, null=True, blank=True)
+    images = models.ManyToManyField(settings.IMAGE_MODEL, null=True)
 
     objects = FluentCommentManager()
 
 
     def __init__(self, *args, **kwargs):
         super(FluentComment, self).__init__(*args, **kwargs)
-
         if self.is_anonymous:
             setattr(self, 'realuser', self.user)
             anony_user = get_user_model().objects.get_anonymous_user()
