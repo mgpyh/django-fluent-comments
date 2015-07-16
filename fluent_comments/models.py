@@ -27,7 +27,7 @@ class FluentCommentManager(CommentManager):
     Manager to optimize SQL queries for comments.
     """
     def get_queryset(self):
-        return super(CommentManager, self).get_queryset()
+        return super(CommentManager, self).get_queryset().order_by('-created_time')
 
     def rebuild(self):
         self.update(tree=None)
@@ -165,7 +165,7 @@ class FluentComment(BaseCommentAbstractModel):
 
 
     class Meta:
-        ordering = ('-created_time',)
+        # ordering = ('-created_time',)
         permissions = [("can_moderate", "Can moderate comments")]
         index_together = [
             ["site", "object_pk", "content_type", "is_public", "is_removed"],
